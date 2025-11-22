@@ -35,9 +35,15 @@ inputs:
       If github-token is specified, this is the run that artifacts will be downloaded from.'
     required: false
     default: ${{ github.run_id }}
+  if-no-artifact-found:
+    description: 'Behavior to use when no artifacts are found. Options: error (fail the action), warn (warn but continue), ignore (silently continue). Default: error'
+    required: false
+    default: 'error'
 outputs:
   download-path:
     description: 'Path of artifact download'
+  artifact-found:
+    description: 'Whether any artifacts were found and downloaded. true if artifacts were found, false otherwise.'
 runs:
   using: 'node20'
   main: 'dist/index.js'

@@ -6,9 +6,11 @@ export enum Inputs {
   RunID = 'run-id',
   Pattern = 'pattern',
   MergeMultiple = 'merge-multiple',
-  ArtifactIds = 'artifact-ids'
+  ArtifactIds = 'artifact-ids',
+  IfNoArtifactFound = 'if-no-artifact-found'
 }
 
 export enum Outputs {
-  DownloadPath = 'download-path'
+  DownloadPath = 'download-path',
+  ArtifactFound = 'artifact-found'
 }
