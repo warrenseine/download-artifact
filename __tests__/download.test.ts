@@ -33,7 +33,7 @@ jest.unstable_mockModule('@actions/core', () => ({
   saveState: jest.fn(),
   exportVariable: jest.fn(),
   addPath: jest.fn(),
-  group: jest.fn((name: string, fn: () => Promise<unknown>) => fn()),
+  group: jest.fn((_name: string, fn: () => Promise<unknown>) => fn()),
   toPlatformPath: jest.fn(p => p),
   toWin32Path: jest.fn(p => p),
   toPosixPath: jest.fn(p => p)
@@ -46,10 +46,12 @@ const {run} = await import('../src/download-artifact.js')
 const {Inputs} = await import('../src/constants.js')
 const {ArtifactNotFoundError} = artifact
 
+type InputValue = string | boolean | undefined
+
 const mockInputs = (
-  overrides?: Partial<{[K in (typeof Inputs)[keyof typeof Inputs]]?: any}>
+  overrides?: Partial<{[K in (typeof Inputs)[keyof typeof Inputs]]?: InputValue}>
 ) => {
-  const inputs: Record<string, any> = {
+  const inputs: Record<string, InputValue> = {
     [Inputs.Name]: 'artifact-name',
     [Inputs.Path]: '/some/artifact/path',
     [Inputs.GitHubToken]: 'warn',
@@ -61,13 +63,13 @@ const mockInputs = (
 
   ;(core.getInput as jest.Mock<typeof core.getInput>).mockImplementation(
     (name: string) => {
-      return inputs[name]
+      return String(inputs[name] ?? '')
     }
   )
   ;(
     core.getBooleanInput as jest.Mock<typeof core.getBooleanInput>
   ).mockImplementation((name: string) => {
-    return inputs[name]
+    return Boolean(inputs[name])
   })
 
   return inputs
@@ -116,6 +118,7 @@ describe('download', () => {
       'download-path',
       expect.any(String)
     )
+    expect(core.setOutput).toHaveBeenCalledWith('artifact-found', 'true')
 
     expect(core.info).toHaveBeenCalledWith(
       'Download artifact has finished successfully'
@@ -152,10 +155,14 @@ describe('download', () => {
 
     expect(core.info).toHaveBeenCalledWith('Total of 2 artifact(s) downloaded')
     expect(artifact.default.downloadArtifact).toHaveBeenCalledTimes(2)
+    expect(core.setOutput).toHaveBeenCalledWith('artifact-found', 'true')
   })
 
   test('sets download path output even when no artifacts are found', async () => {
-    mockInputs({[Inputs.Name]: ''})
+    mockInputs({
+      [Inputs.Name]: '',
+      [Inputs.Pattern]: ''
+    })
 
     await run()
 
@@ -163,6 +170,7 @@ describe('download', () => {
       'download-path',
       expect.any(String)
     )
+    expect(core.setOutput).toHaveBeenCalledWith('artifact-found', 'false')
 
     expect(core.info).toHaveBeenCalledWith(
       'Download artifact has finished successfully'
@@ -193,6 +201,7 @@ describe('download', () => {
       123,
       expect.anything()
     )
+    expect(core.setOutput).toHaveBeenCalledWith('artifact-found', 'true')
   })
 
   test('uses token and repository information when provided', async () => {
@@ -200,6 +209,7 @@ describe('download', () => {
 
     mockInputs({
       [Inputs.Name]: '',
+      [Inputs.Pattern]: '',
       [Inputs.GitHubToken]: token,
       [Inputs.Repository]: 'myorg/myrepo',
       [Inputs.RunID]: '789'
@@ -369,6 +379,7 @@ describe('download', () => {
       })
     )
     expect(core.info).toHaveBeenCalledWith('Total of 1 artifact(s) downloaded')
+    expect(core.setOutput).toHaveBeenCalledWith('artifact-found', 'true')
   })
 
   test('downloads multiple artifacts by ID', async () => {
@@ -406,6 +417,7 @@ describe('download', () => {
       )
     })
     expect(core.info).toHaveBeenCalledWith('Total of 3 artifact(s) downloaded')
+    expect(core.setOutput).toHaveBeenCalledWith('artifact-found', 'true')
   })
 
   test('warns when some artifact IDs are not found', async () => {
@@ -519,6 +531,194 @@ describe('download', () => {
         expectedHash: mockArtifact.digest
       })
     )
+    expect(core.setOutput).toHaveBeenCalledWith('artifact-found', 'true')
+  })
+
+  describe('if-no-artifact-found', () => {
+    test('throws error by default when artifact not found by name', async () => {
+      mockInputs({
+        [Inputs.Name]: 'non-existent-artifact'
+      })
+
+      jest
+        .spyOn(artifact.default, 'getArtifact')
+        .mockImplementation(
+          () =>
+            (Promise.resolve({artifact: undefined}) as unknown) as ReturnType<
+              typeof artifact.default.getArtifact
+            >
+        )
+
+      await expect(run()).rejects.toThrow(
+        "Artifact 'non-existent-artifact' not found"
+      )
+    })
+
+    test('warns but continues when if-no-artifact-found is warn and artifact not found by name', async () => {
+      mockInputs({
+        [Inputs.Name]: 'non-existent-artifact',
+        [Inputs.IfNoArtifactFound]: 'warn'
+      })
+
+      jest
+        .spyOn(artifact.default, 'getArtifact')
+        .mockImplementation(
+          () =>
+            (Promise.resolve({artifact: undefined}) as unknown) as ReturnType<
+              typeof artifact.default.getArtifact
+            >
+        )
+
+      await run()
+
+      expect(core.warning).toHaveBeenCalledWith(
+        "Artifact 'non-existent-artifact' not found"
+      )
+      expect(core.info).toHaveBeenCalledWith('No artifacts found to download')
+      expect(core.setOutput).toHaveBeenCalledWith(
+        'download-path',
+        expect.any(String)
+      )
+      expect(core.setOutput).toHaveBeenCalledWith('artifact-found', 'false')
+      expect(core.info).toHaveBeenCalledWith(
+        'Download artifact has finished successfully'
+      )
+    })
+
+    test('silently continues when if-no-artifact-found is ignore and artifact not found by name', async () => {
+      mockInputs({
+        [Inputs.Name]: 'non-existent-artifact',
+        [Inputs.IfNoArtifactFound]: 'ignore'
+      })
+
+      jest
+        .spyOn(artifact.default, 'getArtifact')
+        .mockImplementation(
+          () =>
+            (Promise.resolve({artifact: undefined}) as unknown) as ReturnType<
+              typeof artifact.default.getArtifact
+            >
+        )
+
+      await run()
+
+      expect(core.debug).toHaveBeenCalledWith(
+        "Artifact 'non-existent-artifact' not found"
+      )
+      expect(core.warning).not.toHaveBeenCalled()
+      expect(core.info).toHaveBeenCalledWith('No artifacts found to download')
+      expect(core.setOutput).toHaveBeenCalledWith(
+        'download-path',
+        expect.any(String)
+      )
+      expect(core.setOutput).toHaveBeenCalledWith('artifact-found', 'false')
+      expect(core.info).toHaveBeenCalledWith(
+        'Download artifact has finished successfully'
+      )
+    })
+
+    test('throws error by default when no artifacts found by ID', async () => {
+      mockInputs({
+        [Inputs.Name]: '',
+        [Inputs.Pattern]: '',
+        [Inputs.ArtifactIds]: '123, 456'
+      })
+
+      jest.spyOn(artifact.default, 'listArtifacts').mockImplementation(() =>
+        Promise.resolve({
+          artifacts: []
+        })
+      )
+
+      await expect(run()).rejects.toThrow(
+        'None of the provided artifact IDs were found'
+      )
+    })
+
+    test('warns but continues when if-no-artifact-found is warn and no artifacts found by ID', async () => {
+      mockInputs({
+        [Inputs.Name]: '',
+        [Inputs.Pattern]: '',
+        [Inputs.ArtifactIds]: '123, 456',
+        [Inputs.IfNoArtifactFound]: 'warn'
+      })
+
+      jest.spyOn(artifact.default, 'listArtifacts').mockImplementation(() =>
+        Promise.resolve({
+          artifacts: []
+        })
+      )
+
+      await run()
+
+      expect(core.warning).toHaveBeenCalledWith(
+        'None of the provided artifact IDs were found'
+      )
+      expect(core.info).toHaveBeenCalledWith('No artifacts found to download')
+      expect(core.setOutput).toHaveBeenCalledWith(
+        'download-path',
+        expect.any(String)
+      )
+      expect(core.setOutput).toHaveBeenCalledWith('artifact-found', 'false')
+    })
+
+    test('throws error by default when pattern matches no artifacts', async () => {
+      mockInputs({
+        [Inputs.Name]: '',
+        [Inputs.Pattern]: 'non-existent-*'
+      })
+
+      jest.spyOn(artifact.default, 'listArtifacts').mockImplementation(() =>
+        Promise.resolve({
+          artifacts: [
+            {id: 123, name: 'existing-artifact', size: 1024, digest: 'abc123'}
+          ]
+        })
+      )
+
+      await expect(run()).rejects.toThrow(
+        "No artifacts found matching pattern 'non-existent-*'"
+      )
+    })
+
+    test('warns but continues when if-no-artifact-found is warn and pattern matches no artifacts', async () => {
+      mockInputs({
+        [Inputs.Name]: '',
+        [Inputs.Pattern]: 'non-existent-*',
+        [Inputs.IfNoArtifactFound]: 'warn'
+      })
+
+      jest.spyOn(artifact.default, 'listArtifacts').mockImplementation(() =>
+        Promise.resolve({
+          artifacts: [
+            {id: 123, name: 'existing-artifact', size: 1024, digest: 'abc123'}
+          ]
+        })
+      )
+
+      await run()
+
+      expect(core.warning).toHaveBeenCalledWith(
+        "No artifacts found matching pattern 'non-existent-*'"
+      )
+      expect(core.info).toHaveBeenCalledWith('No artifacts found to download')
+      expect(core.setOutput).toHaveBeenCalledWith(
+        'download-path',
+        expect.any(String)
+      )
+      expect(core.setOutput).toHaveBeenCalledWith('artifact-found', 'false')
+    })
+
+    test('throws error when if-no-artifact-found has invalid value', async () => {
+      mockInputs({
+        [Inputs.Name]: '',
+        [Inputs.IfNoArtifactFound]: 'invalid-value'
+      })
+
+      await expect(run()).rejects.toThrow(
+        "Invalid value for 'if-no-artifact-found': 'invalid-value'. Must be one of: error, warn, ignore"
+      )
+    })
   })
 
   test('passes skipDecompress option when skip-decompress input is true', async () => {

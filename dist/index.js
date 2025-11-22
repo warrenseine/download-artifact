@@ -129274,6 +129274,7 @@ var Inputs;
     Inputs["Pattern"] = "pattern";
     Inputs["MergeMultiple"] = "merge-multiple";
     Inputs["ArtifactIds"] = "artifact-ids";
+    Inputs["IfNoArtifactFound"] = "if-no-artifact-found";
     Inputs["SkipDecompress"] = "skip-decompress";
     Inputs["DigestMismatch"] = "digest-mismatch";
 })(Inputs || (Inputs = {}));
@@ -129287,6 +129288,7 @@ var DigestMismatchBehavior;
 var Outputs;
 (function (Outputs) {
     Outputs["DownloadPath"] = "download-path";
+    Outputs["ArtifactFound"] = "artifact-found";
 })(Outputs || (Outputs = {}));
 
 ;// CONCATENATED MODULE: ./src/download-artifact.ts
@@ -129302,7 +129304,31 @@ const chunk = (arr, n) => arr.reduce((acc, cur, i) => {
     acc[index] = [...(acc[index] || []), cur];
     return acc;
 }, []);
+function handleNoArtifactFound(behavior, message) {
+    switch (behavior) {
+        case 'error':
+            throw new Error(message);
+        case 'warn':
+            warning(message);
+            break;
+        case 'ignore':
+            core_debug(message);
+            break;
+        default:
+            throw new Error(`Invalid value for 'if-no-artifact-found': '${behavior}'. Must be one of: error, warn, ignore`);
+    }
+}
 async function run() {
+    const ifNoArtifactFoundInput = getInput(Inputs.IfNoArtifactFound, {
+        required: false
+    });
+    const ifNoArtifactFound = (ifNoArtifactFoundInput ||
+        'error');
+    if (ifNoArtifactFound !== 'error' &&
+        ifNoArtifactFound !== 'warn' &&
+        ifNoArtifactFound !== 'ignore') {
+        throw new Error(`Invalid value for 'if-no-artifact-found': '${ifNoArtifactFound}'. Must be one of: error, warn, ignore`);
+    }
     const inputs = {
         name: getInput(Inputs.Name, { required: false }),
         path: getInput(Inputs.Path, { required: false }),
@@ -129358,10 +129384,13 @@ async function run() {
         info(`Downloading single artifact`);
         const { artifact: targetArtifact } = await lib_artifact.getArtifact(inputs.name, options);
         if (!targetArtifact) {
-            throw new Error(`Artifact '${inputs.name}' not found`);
+            handleNoArtifactFound(ifNoArtifactFound, `Artifact '${inputs.name}' not found`);
+            artifacts = [];
         }
-        core_debug(`Found named artifact '${inputs.name}' (ID: ${targetArtifact.id}, Size: ${targetArtifact.size})`);
-        artifacts = [targetArtifact];
+        else {
+            core_debug(`Found named artifact '${inputs.name}' (ID: ${targetArtifact.id}, Size: ${targetArtifact.size})`);
+            artifacts = [targetArtifact];
+        }
     }
     else if (isDownloadByIds) {
         info(`Downloading artifacts by ID`);
@@ -129388,7 +129417,7 @@ async function run() {
         });
         artifacts = listArtifactResponse.artifacts.filter(artifact => artifactIds.includes(artifact.id));
         if (artifacts.length === 0) {
-            throw new Error(`None of the provided artifact IDs were found`);
+            handleNoArtifactFound(ifNoArtifactFound, `None of the provided artifact IDs were found`);
         }
         if (artifacts.length < artifactIds.length) {
             const foundIds = artifacts.map(a => a.id);
@@ -129407,8 +129436,13 @@ async function run() {
         if (inputs.pattern) {
             info(`Filtering artifacts by pattern '${inputs.pattern}'`);
             const matcher = new Minimatch(inputs.pattern);
+            const originalCount = artifacts.length;
             artifacts = artifacts.filter(artifact => matcher.match(artifact.name));
-            core_debug(`Filtered from ${listArtifactResponse.artifacts.length} to ${artifacts.length} artifacts`);
+            core_debug(`Filtered from ${originalCount} to ${artifacts.length} artifacts`);
+            if (artifacts.length === 0 && originalCount > 0) {
+                // Only fail if there were artifacts but none matched the pattern
+                handleNoArtifactFound(ifNoArtifactFound, `No artifacts found matching pattern '${inputs.pattern}'`);
+            }
         }
         else {
             info('No input name, artifact-ids or pattern filtered specified, downloading all artifacts');
@@ -129417,12 +129451,18 @@ async function run() {
             }
         }
     }
-    if (artifacts.length) {
-        info(`Preparing to download the following artifacts:`);
-        artifacts.forEach(artifact => {
-            info(`- ${artifact.name} (ID: ${artifact.id}, Size: ${artifact.size}, Expected Digest: ${artifact.digest})`);
-        });
+    if (artifacts.length === 0) {
+        info('No artifacts found to download');
+        info(`Total of 0 artifact(s) downloaded`);
+        setOutput(Outputs.DownloadPath, resolvedPath);
+        setOutput(Outputs.ArtifactFound, 'false');
+        info('Download artifact has finished successfully');
+        return;
     }
+    info(`Preparing to download the following artifacts:`);
+    artifacts.forEach(artifact => {
+        info(`- ${artifact.name} (ID: ${artifact.id}, Size: ${artifact.size}, Expected Digest: ${artifact.digest})`);
+    });
     const downloadPromises = artifacts.map(artifact => ({
         name: artifact.name,
         promise: lib_artifact.downloadArtifact(artifact.id, {
@@ -129472,6 +129512,7 @@ async function run() {
     }
     info(`Total of ${artifacts.length} artifact(s) downloaded`);
     setOutput(Outputs.DownloadPath, resolvedPath);
+    setOutput(Outputs.ArtifactFound, 'true');
     info('Download artifact has finished successfully');
 }
 run().catch(err => setFailed(`Unable to download artifact(s): ${err.message}`));
