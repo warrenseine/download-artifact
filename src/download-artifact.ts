@@ -15,7 +15,45 @@ export const chunk = <T>(arr: T[], n: number): T[][] =>
     return acc
   }, [] as T[][])
 
+type IfNoArtifactFound = 'error' | 'warn' | 'ignore'
+
+function handleNoArtifactFound(
+  behavior: IfNoArtifactFound,
+  message: string
+): void {
+  switch (behavior) {
+    case 'error':
+      throw new Error(message)
+    case 'warn':
+      core.warning(message)
+      break
+    case 'ignore':
+      core.debug(message)
+      break
+    default:
+      throw new Error(
+        `Invalid value for 'if-no-artifact-found': '${behavior}'. Must be one of: error, warn, ignore`
+      )
+  }
+}
+
 export async function run(): Promise<void> {
+  const ifNoArtifactFoundInput = core.getInput(Inputs.IfNoArtifactFound, {
+    required: false
+  })
+  const ifNoArtifactFound = (ifNoArtifactFoundInput ||
+    'error') as IfNoArtifactFound
+
+  if (
+    ifNoArtifactFound !== 'error' &&
+    ifNoArtifactFound !== 'warn' &&
+    ifNoArtifactFound !== 'ignore'
+  ) {
+    throw new Error(
+      `Invalid value for 'if-no-artifact-found': '${ifNoArtifactFound}'. Must be one of: error, warn, ignore`
+    )
+  }
+
   const inputs = {
     name: core.getInput(Inputs.Name, {required: false}),
     path: core.getInput(Inputs.Path, {required: false}),
@@ -78,14 +116,18 @@ export async function run(): Promise<void> {
     )
 
     if (!targetArtifact) {
-      throw new Error(`Artifact '${inputs.name}' not found`)
+      handleNoArtifactFound(
+        ifNoArtifactFound,
+        `Artifact '${inputs.name}' not found`
+      )
+      artifacts = []
+    } else {
+      core.debug(
+        `Found named artifact '${inputs.name}' (ID: ${targetArtifact.id}, Size: ${targetArtifact.size})`
+      )
+
+      artifacts = [targetArtifact]
     }
-
-    core.debug(
-      `Found named artifact '${inputs.name}' (ID: ${targetArtifact.id}, Size: ${targetArtifact.size})`
-    )
-
-    artifacts = [targetArtifact]
   } else if (isDownloadByIds) {
     core.info(`Downloading artifacts by ID`)
 
@@ -120,7 +162,10 @@ export async function run(): Promise<void> {
     )
 
     if (artifacts.length === 0) {
-      throw new Error(`None of the provided artifact IDs were found`)
+      handleNoArtifactFound(
+        ifNoArtifactFound,
+        `None of the provided artifact IDs were found`
+      )
     }
 
     if (artifacts.length < artifactIds.length) {
@@ -144,10 +189,18 @@ export async function run(): Promise<void> {
     if (inputs.pattern) {
       core.info(`Filtering artifacts by pattern '${inputs.pattern}'`)
       const matcher = new Minimatch(inputs.pattern)
+      const originalCount = artifacts.length
       artifacts = artifacts.filter(artifact => matcher.match(artifact.name))
       core.debug(
-        `Filtered from ${listArtifactResponse.artifacts.length} to ${artifacts.length} artifacts`
+        `Filtered from ${originalCount} to ${artifacts.length} artifacts`
       )
+      if (artifacts.length === 0 && originalCount > 0) {
+        // Only fail if there were artifacts but none matched the pattern
+        handleNoArtifactFound(
+          ifNoArtifactFound,
+          `No artifacts found matching pattern '${inputs.pattern}'`
+        )
+      }
     } else {
       core.info(
         'No input name, artifact-ids or pattern filtered specified, downloading all artifacts'
@@ -160,14 +213,21 @@ export async function run(): Promise<void> {
     }
   }
 
-  if (artifacts.length) {
-    core.info(`Preparing to download the following artifacts:`)
-    artifacts.forEach(artifact => {
-      core.info(
-        `- ${artifact.name} (ID: ${artifact.id}, Size: ${artifact.size}, Expected Digest: ${artifact.digest})`
-      )
-    })
+  if (artifacts.length === 0) {
+    core.info('No artifacts found to download')
+    core.info(`Total of 0 artifact(s) downloaded`)
+    core.setOutput(Outputs.DownloadPath, resolvedPath)
+    core.setOutput(Outputs.ArtifactFound, 'false')
+    core.info('Download artifact has finished successfully')
+    return
   }
+
+  core.info(`Preparing to download the following artifacts:`)
+  artifacts.forEach(artifact => {
+    core.info(
+      `- ${artifact.name} (ID: ${artifact.id}, Size: ${artifact.size}, Expected Digest: ${artifact.digest})`
+    )
+  })
 
   const downloadPromises = artifacts.map(artifact => ({
     name: artifact.name,
@@ -201,6 +261,7 @@ export async function run(): Promise<void> {
   }
   core.info(`Total of ${artifacts.length} artifact(s) downloaded`)
   core.setOutput(Outputs.DownloadPath, resolvedPath)
+  core.setOutput(Outputs.ArtifactFound, 'true')
   core.info('Download artifact has finished successfully')
 }
 

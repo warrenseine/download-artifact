@@ -59,7 +59,7 @@ For assistance with breaking changes, see [MIGRATION.md](docs/MIGRATION.md).
 
 ## Note
 
-Thank you for your interest in this GitHub repo, however, right now we are not taking contributions. 
+Thank you for your interest in this GitHub repo, however, right now we are not taking contributions.
 
 We continue to focus our resources on strategic areas that help our customers be successful while making developers' lives easier. While GitHub Actions remains a key part of this vision, we are allocating resources towards other areas of Actions and are not taking contributions to this repository at this time. The GitHub public roadmap is the best place to follow along for any updates on features we’re working on and what stage they’re in.
 
@@ -122,6 +122,11 @@ You are welcome to still raise bugs in this repo.
     # If github-token is specified, this is the run that artifacts will be downloaded from.
     # Optional. Default is ${{ github.run_id }}
     run-id:
+
+    # Behavior to use when no artifacts are found.
+    # Options: error (fail the action), warn (warn but continue), ignore (silently continue).
+    # Optional. Default is 'error'
+    if-no-artifact-found:
 ```
 
 ### Outputs
@@ -129,6 +134,7 @@ You are welcome to still raise bugs in this repo.
 | Name | Description | Example |
 | - | - | - |
 | `download-path` | Absolute path where the artifact(s) were downloaded | `/tmp/my/download/path` |
+| `artifact-found` | Whether any artifacts were found and downloaded | `true` or `false` |
 
 ## Examples
 
@@ -307,6 +313,37 @@ steps:
     github-token: ${{ secrets.GH_PAT }} # token with actions:read permissions on target repo
     repository: actions/toolkit
     run-id: 1234
+```
+
+### Handle Missing Artifacts Gracefully
+
+By default, the action will fail if no artifacts are found. You can change this behavior using the `if-no-artifact-found` option:
+
+```yaml
+steps:
+- uses: actions/download-artifact@v5
+  with:
+    name: my-artifact
+    if-no-artifact-found: warn  # Options: error (default), warn, ignore
+```
+
+- `error` (default): Fail the action if no artifacts are found
+- `warn`: Log a warning but continue the workflow
+- `ignore`: Silently continue without logging any message
+
+This is particularly useful when artifacts are conditionally generated:
+
+```yaml
+steps:
+- uses: actions/download-artifact@v5
+  with:
+    name: conditional-artifact
+    if-no-artifact-found: ignore  # Don't fail if artifact wasn't created
+  id: download
+
+- name: Check if artifact was found
+  if: steps.download.outputs.artifact-found == 'true'
+  run: echo "Artifact was downloaded successfully"
 ```
 
 ## Limitations
